@@ -1,13 +1,31 @@
 import mysql from "mysql2/promise";
 import dotenv from "dotenv";
+import fs from 'fs';
 
 dotenv.config();
+
+function buildSslConfig() {
+  const caValue = process.env.DB_SSL_CA;
+  const caPath = process.env.DB_SSL_CA_PATH;
+
+  // If we are running locally (no env vars set), return undefined (no SSL)
+  if (!caValue && !caPath) return undefined;
+
+  // If running in production on Render, read the file and enable SSL
+  const ca = caValue || fs.readFileSync(caPath, "utf8");
+
+  return {
+    ca,
+    rejectUnauthorized: true, 
+  };
+}
 
 export const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
+  ssl:buildSslConfig,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
