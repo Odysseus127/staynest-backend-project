@@ -4,8 +4,12 @@ import {
   createHotel, updateHotel, deleteHotel,
   createRoomType, updateRoomType, deleteRoomType,
 } from "../services/admin.service.js";
+import {
+  bookingListQuerySchema,
+  userListQuerySchema,
+} from "../utils/admin-query.js";
 
-/* ------- Schemas ------- */
+/* Schemas */
 const updateStatusSchema = z.object({
   status: z.enum(["PENDING", "CONFIRMED", "CHECKED_IN", "COMPLETED", "CANCELLED"]),
 });
@@ -30,13 +34,13 @@ const roomSchema = z.object({
   description: z.string().max(1000).optional(),
   capacity: z.number().int().min(1).max(20).optional(),
   basePrice: z.number().positive(),
-  totalRooms: z.number().int().min(1).optional(),
+  totalRooms: z.number().int().min(1).max(2_147_483_647).optional(),
   imageUrl: z.string().optional(),
 });
 
 const roomUpdateSchema = roomSchema.omit({ hotelId: true }).partial();
 
-/* ------- Handlers ------- */
+/* Handlers */
 const handleZod = (err, res) =>
   err instanceof z.ZodError
     ? res.status(400).json({ error: err.issues[0].message })
@@ -48,13 +52,23 @@ export async function stats(req, res, next) {
 }
 
 export async function bookings(req, res, next) {
-  try { res.json(await listAllBookings(req.query)); }
-  catch (err) { next(err); }
+  try {
+    const query = bookingListQuerySchema.parse(req.query);
+    res.json(await listAllBookings(query));
+  } catch (err) {
+    if (handleZod(err, res)) return;
+    next(err);
+  }
 }
 
 export async function users(req, res, next) {
-  try { res.json(await listAllUsers(req.query)); }
-  catch (err) { next(err); }
+  try {
+    const query = userListQuerySchema.parse(req.query);
+    res.json(await listAllUsers(query));
+  } catch (err) {
+    if (handleZod(err, res)) return;
+    next(err);
+  }
 }
 
 export async function patchBookingStatus(req, res, next) {

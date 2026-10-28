@@ -1,21 +1,21 @@
 import { pool } from "../config/db.js";
+import { getPeakOccupancy } from "../utils/occupancy.js";
+import {
+  dateOnlyDaysBetween,
+  getUtcDateOnly,
+  isValidDateOnly,
+} from "../utils/date.js";
 
 
 /* CREATE BOOKING (transaction + lock)*/
 export async function createBooking({ userId, roomTypeId, checkIn, checkOut, guests }) {
-  // ---- Basic validation (before touching DB) ----
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const ci = new Date(checkIn);
-  const co = new Date(checkOut);
-
-  if (Number.isNaN(ci.getTime()) || Number.isNaN(co.getTime())) {
-    throw httpError(400, "Invalid dates");
+  if (!isValidDateOnly(checkIn) || !isValidDateOnly(checkOut)) {
+    throw httpError(400, "Use valid YYYY-MM-DD dates");
   }
-  if (co <= ci) {
+  if (checkOut <= checkIn) {
     throw httpError(400, "Check-out must be after check-in");
   }
-  if (ci < today) {
+  if (checkIn < getUtcDateOnly()) {
     throw httpError(400, "Check-in cannot be in the past");
   }
 
@@ -38,25 +38,25 @@ export async function createBooking({ userId, roomTypeId, checkIn, checkOut, gue
       throw httpError(400, `Room capacity is ${room.capacity} guests`);
     }
 
-    // Count overlapping bookings
-    const [bookedRows] = await conn.query(
-      `SELECT COUNT(*) AS booked FROM bookings
+    // Measure the maximum simultaneous occupancy during the requested stay
+    const [bookings] = await conn.query(
+      `SELECT DATE_FORMAT(check_in, '%Y-%m-%d') AS checkIn,
+              DATE_FORMAT(check_out, '%Y-%m-%d') AS checkOut
+       FROM bookings
        WHERE room_type_id = ?
          AND status IN ('PENDING', 'CONFIRMED', 'CHECKED_IN')
          AND check_in  < ?
          AND check_out > ?`,
       [roomTypeId, checkOut, checkIn]
     );
-    const booked = bookedRows[0].booked;
+    const booked = getPeakOccupancy(bookings, checkIn, checkOut);
 
     if (room.total_rooms - booked <= 0) {
       throw httpError(409, "No rooms available for the selected dates");
     }
 
     // Calculate total: nights × base_price
-    const nights = Math.round(
-      (co.getTime() - ci.getTime()) / (1000 * 60 * 60 * 24)
-    );
+    const nights = dateOnlyDaysBetween(checkIn, checkOut);
     const totalAmount = Number(room.base_price) * nights;
 
     // Insert (status = CONFIRMED to skip payment for now)
@@ -142,7 +142,8 @@ export async function cancelBooking(id, user) {
     await conn.beginTransaction();
 
     const [rows] = await conn.query(
-      `SELECT id, user_id AS userId, status, check_in AS checkIn
+      `SELECT id, user_id AS userId, status,
+              DATE_FORMAT(check_in, '%Y-%m-%d') AS checkIn
        FROM bookings WHERE id = ? FOR UPDATE`,
       [id]
     );
@@ -159,9 +160,7 @@ export async function cancelBooking(id, user) {
       throw httpError(400, `Cannot cancel a ${booking.status.toLowerCase()} booking`);
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (new Date(booking.checkIn) <= today) {
+    if (booking.checkIn <= getUtcDateOnly()) {
       throw httpError(400, "Cannot cancel a booking that has already started");
     }
     await conn.query("UPDATE bookings SET status = 'CANCELLED' WHERE id = ?", [id]);

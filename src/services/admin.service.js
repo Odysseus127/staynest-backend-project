@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { getPeakOccupancyAcrossBookings } from "../utils/occupancy.js";
 
 
 /* DASHBOARD STATS*/
@@ -243,13 +244,48 @@ export async function updateRoomType(id, data) {
   }
   if (fields.length === 0) throw httpError(400, "No fields to update");
 
-  params.push(id);
-  const [result] = await pool.query(
-    `UPDATE room_types SET ${fields.join(", ")} WHERE id = ?`,
-    params
-  );
-  if (result.affectedRows === 0) throw httpError(404, "Room type not found");
-  return { id };
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [roomRows] = await conn.query(
+      "SELECT total_rooms AS totalRooms FROM room_types WHERE id = ? FOR UPDATE",
+      [id]
+    );
+    if (roomRows.length === 0) throw httpError(404, "Room type not found");
+
+    if (data.totalRooms !== undefined && data.totalRooms < roomRows[0].totalRooms) {
+      const [bookings] = await conn.query(
+        `SELECT DATE_FORMAT(check_in, '%Y-%m-%d') AS checkIn,
+                DATE_FORMAT(check_out, '%Y-%m-%d') AS checkOut
+         FROM bookings
+         WHERE room_type_id = ?
+           AND status IN ('PENDING','CONFIRMED','CHECKED_IN')`,
+        [id]
+      );
+      const peakOccupancy = getPeakOccupancyAcrossBookings(bookings);
+
+      if (data.totalRooms < peakOccupancy) {
+        throw httpError(
+          409,
+          `Cannot reduce total rooms below current peak occupancy of ${peakOccupancy}`
+        );
+      }
+    }
+
+    params.push(id);
+    await conn.query(
+      `UPDATE room_types SET ${fields.join(", ")} WHERE id = ?`,
+      params
+    );
+    await conn.commit();
+    return { id };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 export async function deleteRoomType(id) {
