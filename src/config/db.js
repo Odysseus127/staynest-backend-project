@@ -4,6 +4,11 @@ import fs from 'fs';
 
 dotenv.config();
 
+const DB_PORT = Number(process.env.DB_PORT || 3306);
+if (!Number.isInteger(DB_PORT) || DB_PORT < 1 || DB_PORT > 65535) {
+  throw new Error("DB_PORT must be a valid TCP port number");
+}
+
 function buildSslConfig() {
   const caValue = process.env.DB_SSL_CA;
   const caPath = process.env.DB_SSL_CA_PATH;
@@ -22,6 +27,7 @@ function buildSslConfig() {
 
 export const pool = mysql.createPool({
   host: process.env.DB_HOST,
+  port: DB_PORT,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
@@ -29,7 +35,7 @@ export const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  connectTimeout:10000
+  connectTimeout: 10000,
 });
 
 // Quick helper to test the connection
